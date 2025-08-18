@@ -1,0 +1,55 @@
+job:
+  extension: ai_toolkit.extensions.sd_trainer
+  extension_args:
+    process:
+      - type: "train"
+        training_folder: "output/hidream_i1_finetune"
+        device: "cuda:0"
+        trigger_word: "hidream_style"
+        network:
+          type: "lora"
+          linear: 16
+          linear_alpha: 16
+        save:
+          dtype: "float16"
+          save_every: 500
+          max_step_saves_to_keep: 4
+        datasets:
+          - folder_path: "input/dataset"
+            caption_ext: "txt"
+            caption_dropout_rate: 0.05
+            shuffle_tokens: false
+            cache_latents_to_disk: true
+            resolution: [1024, 1024]
+        train:
+          batch_size: 1
+          steps: 2000
+          gradient_accumulation_steps: 4
+          train_unet: true
+          train_text_encoder: false
+          gradient_checkpointing: true
+          noise_scheduler: "flowmatch"
+          optimizer: "adamw8bit"
+          lr: 0.0001
+          ema_config:
+            use_ema: true
+            ema_decay: 0.99
+          dtype: "bf16"
+          model:
+            name_or_path: "HiDream-ai/HiDream-I1-Fast"
+            is_flux: false
+            quantize: true
+          sample:
+            sampler: "flowmatch"
+            sample_every: 250
+            width: 1024
+            height: 1024
+            prompts:
+              - "a beautiful landscape with mountains and a lake, hidream_style"
+              - "a portrait of a person in artistic style, hidream_style"
+              - "a futuristic cityscape at night, hidream_style"
+            neg: ""
+            seed: 42
+            walk_seed: true
+            guidance_scale: 3.5
+            sample_steps: 16

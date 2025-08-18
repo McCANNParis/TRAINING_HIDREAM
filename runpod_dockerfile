@@ -1,0 +1,77 @@
+# Use newer PyTorch image with CUDA 12.4 for L40S compatibility
+FROM runpod/pytorch:2.3.0-py3.11-cuda12.4.0-devel-ubuntu22.04
+
+# Set working directory
+WORKDIR /workspace
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    wget \
+    vim \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone ai-toolkit
+RUN git clone https://github.com/ostris/ai-toolkit.git /workspace/ai-toolkit
+
+WORKDIR /workspace/ai-toolkit
+
+# Upgrade pip
+RUN pip install --upgrade pip
+
+# Install PyTorch with CUDA 12.4 for Flash Attention
+RUN pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu124
+
+# Install Flash Attention
+RUN pip install flash-attn --no-build-isolation
+
+# Install core dependencies
+RUN pip install \
+    transformers==4.44.0 \
+    diffusers==0.30.0 \
+    accelerate==0.32.0 \
+    safetensors \
+    omegaconf \
+    einops \
+    xformers==0.0.27 \
+    bitsandbytes \
+    wandb \
+    opencv-python \
+    Pillow \
+    tqdm \
+    pyyaml \
+    tensorboard
+
+# Create directories
+RUN mkdir -p /workspace/ai-toolkit/input/dataset && \
+    mkdir -p /workspace/ai-toolkit/output && \
+    mkdir -p /workspace/ai-toolkit/configs
+
+# Copy configuration
+COPY config/hidream_i1_finetune.yaml /workspace/ai-toolkit/configs/
+
+# Copy helper scripts
+COPY prepare_dataset.py /workspace/ai-toolkit/
+COPY train_hidream.py /workspace/ai-toolkit/
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV CUDA_VISIBLE_DEVICES=0
+ENV TRANSFORMERS_CACHE=/workspace/cache
+ENV HF_HOME=/workspace/cache
+# L40S optimizations
+ENV TORCH_CUDA_ARCH_LIST="8.9"
+ENV CUDA_LAUNCH_BLOCKING=0
+ENV PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
+# Create cache directory
+RUN mkdir -p /workspace/cache
+
+# Entry point
+CMD ["/bin/bash"]

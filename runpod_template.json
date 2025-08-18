@@ -1,0 +1,46 @@
+{
+  "name": "HiDream-I1 Finetuning (L40S Optimized)",
+  "description": "Finetune HiDream-I1 17B image generation model using ai-toolkit - Optimized for L40S GPUs",
+  "dockerImage": "your-dockerhub-username/hidream-finetune:latest",
+  "volumeSize": 200,
+  "containerDiskSize": 100,
+  "gpuType": "L40S",
+  "minGpuCount": 1,
+  "maxGpuCount": 1,
+  "minMemoryInGb": 48,
+  "minVcpuCount": 16,
+  "dockerArgs": "",
+  "env": [
+    {
+      "key": "HUGGING_FACE_HUB_TOKEN",
+      "value": "YOUR_HF_TOKEN_HERE"
+    },
+    {
+      "key": "WANDB_API_KEY", 
+      "value": "YOUR_WANDB_KEY_HERE"
+    },
+    {
+      "key": "CUDA_VISIBLE_DEVICES",
+      "value": "0"
+    },
+    {
+      "key": "TRANSFORMERS_CACHE",
+      "value": "/workspace/cache"
+    },
+    {
+      "key": "PYTORCH_CUDA_ALLOC_CONF",
+      "value": "expandable_segments:True"
+    },
+    {
+      "key": "TORCH_CUDA_ARCH_LIST",
+      "value": "8.9"
+    },
+    {
+      "key": "CUDA_LAUNCH_BLOCKING",
+      "value": "0"
+    }
+  ],
+  "ports": "8888/http,6006/http",
+  "startJupyter": true,
+  "startScript": "/workspace/ai-toolkit/runpod_setup.sh"
+}
