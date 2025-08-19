@@ -170,7 +170,10 @@ pip install --no-cache-dir \
     Pillow>=10.4.0 \
     tqdm>=4.66.0 \
     pyyaml>=6.0 \
-    python-dotenv>=1.0.0
+    oyaml>=1.0 \
+    python-dotenv>=1.0.0 \
+    lycoris-lora>=2.2.0 \
+    prodigyopt>=1.0
 
 # Install optimization libraries
 echo ""
@@ -208,6 +211,17 @@ pip install --no-cache-dir \
     jupyter \
     matplotlib \
     scipy
+
+# Install ai-toolkit dependencies if ai-toolkit exists
+echo ""
+if [ -d "/workspace/ai-toolkit" ]; then
+    echo "Installing ai-toolkit dependencies..."
+    cd /workspace/ai-toolkit
+    if [ -f "requirements.txt" ]; then
+        pip install --no-cache-dir -r requirements.txt
+    fi
+    cd "$WORK_DIR"
+fi
 
 # Validation check
 echo ""
