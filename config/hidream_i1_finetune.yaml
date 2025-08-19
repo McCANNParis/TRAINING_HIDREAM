@@ -35,6 +35,12 @@ job:
             use_ema: true
             ema_decay: 0.99
           dtype: "bf16"
+          # Logging configuration - set to null to disable, or configure to enable
+          tracker: null  # Change to "wandb" to enable W&B logging
+          # To enable wandb, uncomment and configure:
+          # tracker: "wandb"
+          # tracker_project: "hidream-finetune"
+          # tracker_run_name: "hidream_i1_lora"
           model:
             name_or_path: "HiDream-ai/HiDream-I1-Fast"
             is_flux: false
