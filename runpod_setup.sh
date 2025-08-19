@@ -1,100 +1,317 @@
 #!/bin/bash
 
-echo "==================================="
-echo "HiDream-I1 Finetuning Setup on RunPod"
-echo "==================================="
+echo "==================================================="
+echo "HiDream-I1 Finetuning Setup"
+echo "==================================================="
 
-# Detect GPU type
-if nvidia-smi --query-gpu=name --format=csv,noheader | grep -q "L40"; then
-    echo "✓ NVIDIA L40S GPU detected - Optimized for 48GB VRAM"
-    export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
-    export CUDA_LAUNCH_BLOCKING=0
+# Function to check if running in RunPod
+check_runpod() {
+    if [ -n "$RUNPOD_POD_ID" ] || [ -d "/workspace" ]; then
+        echo "✓ RunPod environment detected"
+        return 0
+    else
+        echo "⚠ Not running in RunPod - adjusting paths for local setup"
+        return 1
+    fi
+}
+
+# Detect and display GPU information
+echo ""
+echo "GPU Detection:"
+if command -v nvidia-smi &> /dev/null; then
+    GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+    echo "Found $GPU_COUNT GPU(s)"
+    nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader | while IFS=',' read -r index name memory; do
+        # Convert memory from MiB to GB
+        memory_gb=$(echo "scale=1; ${memory%MiB}/1024" | bc 2>/dev/null || echo "${memory}")
+        echo "  GPU $index: $name ($memory_gb GB)"
+    done
+    
+    # Check for L40S and set optimizations
+    if nvidia-smi --query-gpu=name --format=csv,noheader | grep -q "L40"; then
+        echo "  ✓ NVIDIA L40S detected - Excellent for training with 48GB VRAM"
+        export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+        export CUDA_LAUNCH_BLOCKING=0
+        IS_L40S=true
+    else
+        IS_L40S=false
+    fi
+else
+    echo "ERROR: nvidia-smi not found. Please ensure NVIDIA drivers are installed."
+    exit 1
 fi
 
-# Update system packages
-apt-get update && apt-get install -y \
-    git \
-    wget \
-    python3-pip \
-    python3-venv \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1
+# Update system packages only if we have sudo/root access
+if [ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null; then
+    echo ""
+    echo "Installing system dependencies..."
+    if [ "$EUID" -eq 0 ]; then
+        apt-get update && apt-get install -y \
+            git \
+            wget \
+            curl \
+            python3-pip \
+            python3-dev \
+            python3-venv \
+            build-essential \
+            libgl1-mesa-glx \
+            libglib2.0-0 \
+            libsm6 \
+            libxext6 \
+            libxrender-dev \
+            libgomp1 \
+            bc
+    else
+        sudo apt-get update && sudo apt-get install -y \
+            git \
+            wget \
+            curl \
+            python3-pip \
+            python3-dev \
+            python3-venv \
+            build-essential \
+            libgl1-mesa-glx \
+            libglib2.0-0 \
+            libsm6 \
+            libxext6 \
+            libxrender-dev \
+            libgomp1 \
+            bc
+    fi
+else
+    echo "⚠ No sudo access - skipping system package installation"
+    echo "  Assuming packages are pre-installed in container"
+fi
 
-# Set up working directory
-WORK_DIR="/workspace/hidream_finetune"
-mkdir -p $WORK_DIR
-cd $WORK_DIR
+# Set up working directory based on environment
+if check_runpod; then
+    WORK_DIR="/workspace/TRAINING_HIDREAM"
+else
+    WORK_DIR="$(pwd)"
+fi
 
-# Clone ai-toolkit repository
-echo "Cloning ai-toolkit repository..."
-git clone https://github.com/ostris/ai-toolkit.git
-cd ai-toolkit
+echo ""
+echo "Working directory: $WORK_DIR"
 
-# Create virtual environment
-echo "Creating virtual environment..."
-python3 -m venv venv
-source venv/bin/activate
+# Check if we're already in the project directory
+if [ -f "$WORK_DIR/train_hidream.py" ]; then
+    echo "✓ Already in project directory"
+    cd "$WORK_DIR"
+else
+    mkdir -p "$WORK_DIR"
+    cd "$WORK_DIR"
+fi
 
-# Upgrade pip
-pip install --upgrade pip
+# Check Python version
+echo ""
+echo "Python environment check:"
+PYTHON_CMD="python3"
+if command -v python3.11 &> /dev/null; then
+    PYTHON_CMD="python3.11"
+    echo "✓ Using Python 3.11"
+elif command -v python3.10 &> /dev/null; then
+    PYTHON_CMD="python3.10"
+    echo "✓ Using Python 3.10"
+else
+    echo "✓ Using system Python 3"
+fi
 
-# Install PyTorch with CUDA 12.4 support for Flash Attention (L40S compatible)
-echo "Installing PyTorch with CUDA 12.4 (L40S optimized)..."
-pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu124
+$PYTHON_CMD --version
 
-# Install Flash Attention
-echo "Installing Flash Attention..."
-pip install flash-attn --no-build-isolation
+# Upgrade pip first
+echo ""
+echo "Upgrading pip..."
+$PYTHON_CMD -m pip install --upgrade pip setuptools wheel
 
-# Install ai-toolkit dependencies
-echo "Installing ai-toolkit dependencies..."
-pip install -r requirements.txt
+# Install PyTorch with appropriate CUDA version
+echo ""
+echo "Installing PyTorch..."
 
-# Install additional dependencies for HiDream-I1
-echo "Installing HiDream-I1 specific dependencies..."
-pip install \
-    transformers \
-    diffusers \
-    accelerate \
-    safetensors \
-    omegaconf \
-    einops \
-    xformers \
-    bitsandbytes \
-    wandb
+# Check CUDA version
+if command -v nvcc &> /dev/null; then
+    CUDA_VERSION=$(nvcc --version | grep "release" | sed 's/.*release //' | sed 's/,.*//')
+    echo "CUDA Version: $CUDA_VERSION"
+else
+    echo "CUDA compiler not found, using runtime version"
+    CUDA_VERSION="12.1"
+fi
 
-# Login to Hugging Face (required for Llama model access)
-echo "Please login to Hugging Face to access Llama models:"
+# Install PyTorch based on CUDA version
+if [[ "$CUDA_VERSION" == "12.4"* ]]; then
+    echo "Installing PyTorch for CUDA 12.4..."
+    pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
+elif [[ "$CUDA_VERSION" == "12.1"* ]] || [[ "$CUDA_VERSION" == "12.2"* ]] || [[ "$CUDA_VERSION" == "12.3"* ]]; then
+    echo "Installing PyTorch for CUDA 12.1..."
+    pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
+else
+    echo "Installing PyTorch for CUDA 11.8 (fallback)..."
+    pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu118
+fi
+
+# Install core dependencies first
+echo ""
+echo "Installing core ML dependencies..."
+pip install --no-cache-dir \
+    transformers>=4.44.0 \
+    diffusers>=0.30.0 \
+    accelerate>=0.34.0 \
+    safetensors>=0.4.5 \
+    huggingface-hub>=0.24.0 \
+    datasets>=2.20.0
+
+# Install training dependencies
+echo ""
+echo "Installing training dependencies..."
+pip install --no-cache-dir \
+    omegaconf>=2.3.0 \
+    einops>=0.8.0 \
+    tensorboard>=2.17.0 \
+    wandb>=0.17.0 \
+    Pillow>=10.4.0 \
+    tqdm>=4.66.0 \
+    pyyaml>=6.0
+
+# Install optimization libraries
+echo ""
+echo "Installing optimization libraries..."
+
+# Install bitsandbytes
+echo "Installing bitsandbytes..."
+pip install --no-cache-dir bitsandbytes>=0.43.0
+
+# Install xformers (memory efficient attention)
+echo "Installing xformers..."
+pip install --no-cache-dir xformers>=0.0.27
+
+# Try to install Flash Attention (may fail on some systems)
+echo ""
+echo "Attempting Flash Attention installation..."
+if pip install flash-attn --no-build-isolation 2>/dev/null; then
+    echo "✓ Flash Attention installed successfully"
+else
+    echo "⚠ Flash Attention installation failed (optional - training will still work)"
+fi
+
+# Install ai-toolkit if we have a requirements.txt
+if [ -f "requirements.txt" ]; then
+    echo ""
+    echo "Installing project requirements..."
+    pip install --no-cache-dir -r requirements.txt
+fi
+
+# Install additional useful tools
+echo ""
+echo "Installing additional tools..."
+pip install --no-cache-dir \
+    ipython \
+    jupyter \
+    matplotlib \
+    scipy
+
+# Validation check
+echo ""
+echo "==================================================="
+echo "Validating Installation"
+echo "==================================================="
+
+# Function to check if a Python package is installed
+check_package() {
+    if python -c "import $1" 2>/dev/null; then
+        version=$(python -c "import $1; print($1.__version__)" 2>/dev/null || echo "unknown")
+        echo "  ✓ $1 ($version)"
+        return 0
+    else
+        echo "  ✗ $1 - NOT INSTALLED"
+        return 1
+    fi
+}
+
+# Check required packages
+REQUIRED_PACKAGES=("torch" "transformers" "diffusers" "accelerate" "bitsandbytes" "safetensors" "einops" "omegaconf" "PIL" "tqdm")
+OPTIONAL_PACKAGES=("flash_attn" "xformers" "wandb")
+
+echo "Required packages:"
+MISSING_REQUIRED=false
+for pkg in "${REQUIRED_PACKAGES[@]}"; do
+    if ! check_package "$pkg"; then
+        MISSING_REQUIRED=true
+    fi
+done
+
+echo ""
+echo "Optional packages:"
+for pkg in "${OPTIONAL_PACKAGES[@]}"; do
+    check_package "$pkg"
+done
+
+# Check CUDA availability in PyTorch
+echo ""
+echo "PyTorch CUDA check:"
+if python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+    CUDA_VERSION=$(python -c "import torch; print(torch.version.cuda)")
+    TORCH_VERSION=$(python -c "import torch; print(torch.__version__)")
+    echo "  ✓ CUDA is available"
+    echo "  PyTorch version: $TORCH_VERSION"
+    echo "  CUDA version: $CUDA_VERSION"
+    
+    # Show GPU info from PyTorch
+    python -c "import torch; print(f'  GPU: {torch.cuda.get_device_name(0)}')" 2>/dev/null
+    python -c "import torch; print(f'  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB')" 2>/dev/null
+else
+    echo "  ✗ CUDA is NOT available in PyTorch"
+    echo "  This will prevent GPU training!"
+    MISSING_REQUIRED=true
+fi
+
+if [ "$MISSING_REQUIRED" = true ]; then
+    echo ""
+    echo "ERROR: Missing required packages. Please run:"
+    echo "pip install transformers diffusers accelerate bitsandbytes safetensors einops omegaconf pillow tqdm"
+    echo ""
+    echo "If installation fails, try:"
+    echo "pip install --upgrade pip setuptools wheel"
+    echo "pip install --no-cache-dir <package_name>"
+    exit 1
+fi
+
+# Hugging Face login reminder
+echo ""
+echo "==================================================="
+echo "Hugging Face Authentication"
+echo "==================================================="
+echo "To access HiDream models, you need to login to Hugging Face:"
 echo "Run: huggingface-cli login"
-echo "You'll need your HF token with access to meta-llama/Llama-3.2-1B-Instruct"
+echo "Get your token from: https://huggingface.co/settings/tokens"
 
 # Create necessary directories
+echo ""
+echo "Setting up project directories..."
+mkdir -p dataset
 mkdir -p input/dataset
 mkdir -p output/hidream_i1_finetune
-mkdir -p configs
+mkdir -p config
 
-# Copy helper scripts if they exist in /workspace
-if [ -f "/workspace/train_hidream.py" ]; then
-    cp /workspace/train_hidream.py .
-    echo "✓ Copied train_hidream.py"
+# Check for existing scripts
+if [ -f "train_hidream.py" ]; then
+    echo "✓ train_hidream.py found"
+else
+    echo "⚠ train_hidream.py not found - please ensure it's in the current directory"
 fi
 
-if [ -f "/workspace/prepare_dataset.py" ]; then
-    cp /workspace/prepare_dataset.py .
-    echo "✓ Copied prepare_dataset.py"
+if [ -f "prepare_dataset.py" ]; then
+    echo "✓ prepare_dataset.py found"
+else
+    echo "⚠ prepare_dataset.py not found - please ensure it's in the current directory"
 fi
 
-# Copy configuration file
+# Copy or update configuration file
+echo ""
 echo "Setting up configuration..."
 
 # Check if L40S GPU is present and create optimized config
-if nvidia-smi --query-gpu=name --format=csv,noheader | grep -q "L40"; then
+if [ "$IS_L40S" = true ]; then
     echo "Creating L40S optimized configuration..."
-    cat > configs/hidream_i1_finetune.yaml << 'EOF'
+    cat > config/hidream_i1_finetune.yaml << 'EOF'
 job:
   extension: ai_toolkit.extensions.sd_trainer
   extension_args:
@@ -153,7 +370,7 @@ job:
 EOF
 else
     echo "Creating standard configuration..."
-    cat > configs/hidream_i1_finetune.yaml << 'EOF'
+    cat > config/hidream_i1_finetune.yaml << 'EOF'
 job:
   extension: ai_toolkit.extensions.sd_trainer
   extension_args:
@@ -212,28 +429,44 @@ job:
 EOF
 fi
 
-echo "==================================="
-echo "Setup complete!"
-echo "==================================="
+echo ""
+echo "==================================================="
+echo "Setup Complete!"
+echo "==================================================="
 echo ""
 
-# Check if L40S GPU is present
-if nvidia-smi --query-gpu=name --format=csv,noheader | grep -q "L40"; then
+# GPU-specific recommendations
+if [ "$IS_L40S" = true ]; then
     echo "L40S GPU Configuration:"
-    echo "- 48GB VRAM available"
-    echo "- Optimized for batch_size=4"
-    echo "- Full HiDream-I1-Dev model enabled"
-    echo "- Use --auto-optimize flag for automatic configuration"
+    echo "  - 48GB VRAM available"
+    echo "  - Optimized for batch_size=4"
+    echo "  - Full HiDream-I1-Dev model enabled"
+    echo "  - Extended training to 3000 steps"
     echo ""
 fi
 
 echo "Next steps:"
-echo "1. Login to Hugging Face: huggingface-cli login"
-echo "2. Upload your dataset to input/dataset/"
-echo "3. For L40S optimized training: python train_hidream.py --auto-optimize"
-echo "   Or standard training: python run.py configs/hidream_i1_finetune.yaml"
+echo "1. Login to Hugging Face (if not already done):"
+echo "   huggingface-cli login"
 echo ""
-echo "Dataset format:"
-echo "- Place images in input/dataset/"
-echo "- Create .txt files with same name as images for captions"
-echo "- Example: image001.jpg and image001.txt"
+echo "2. Prepare your dataset in the 'dataset' folder:"
+echo "   - Place images in dataset/"
+echo "   - Create .txt files with same name as images for captions"
+echo "   - Example: dataset/image001.jpg and dataset/image001.txt"
+echo ""
+echo "3. Validate your setup:"
+echo "   python train_hidream.py --validate-only"
+echo ""
+echo "4. Start training:"
+if [ "$IS_L40S" = true ]; then
+    echo "   python train_hidream.py --auto-optimize --dataset-path dataset"
+else
+    echo "   python train_hidream.py --auto-optimize --dataset-path dataset"
+fi
+echo ""
+echo "5. Monitor training:"
+echo "   tensorboard --logdir output/hidream_i1_finetune"
+echo ""
+echo "For help and documentation:"
+echo "  - See HOW_TO.md for detailed instructions"
+echo "  - Check README.md for project overview"
