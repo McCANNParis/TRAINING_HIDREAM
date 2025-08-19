@@ -149,7 +149,33 @@ def run_training(config_path: Path, resume: bool = False):
     """
     Run the training process using ai-toolkit.
     """
-    cmd = ["python", "run.py", str(config_path)]
+    # Check multiple possible ai-toolkit locations
+    ai_toolkit_paths = [
+        Path("/workspace/ai-toolkit"),  # Main workspace location
+        Path("/workspace/hidream_finetune/ai-toolkit"),  # Alternative location
+        Path("./ai-toolkit"),  # Local directory
+    ]
+    
+    ai_toolkit_path = None
+    for path in ai_toolkit_paths:
+        if path.exists() and (path / "run.py").exists():
+            ai_toolkit_path = path
+            print(f"Found ai-toolkit at: {ai_toolkit_path}")
+            break
+    
+    if ai_toolkit_path:
+        # Use ai-toolkit installation
+        cmd = ["python", str(ai_toolkit_path / "run.py"), str(config_path)]
+    else:
+        # Try to use ai-toolkit directly if it's installed as a package
+        try:
+            import ai_toolkit
+            # Use ai-toolkit module directly
+            cmd = ["python", "-m", "ai_toolkit.run", str(config_path)]
+        except ImportError:
+            # Fallback to diffusers training script
+            print("ai-toolkit not found. Using direct diffusers training.")
+            return run_diffusers_training(config_path, resume)
     
     if resume:
         cmd.append("--resume")
@@ -161,6 +187,57 @@ def run_training(config_path: Path, resume: bool = False):
         return result.returncode == 0
     except subprocess.CalledProcessError as e:
         print(f"Training failed with error: {e}")
+        return False
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user")
+        return False
+
+def run_diffusers_training(config_path: Path, resume: bool = False):
+    """
+    Run training directly with diffusers if ai-toolkit is not available.
+    """
+    import yaml
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Extract training parameters from config
+    train_args = config['job']['extension_args']['process'][0]
+    
+    # Build accelerate launch command
+    cmd = [
+        "accelerate", "launch",
+        "--mixed_precision", "bf16",
+        "--num_processes", "1",
+        "train_lora_diffusers.py",  # We'll create this script
+        "--model_name", train_args['train']['model']['name_or_path'],
+        "--dataset_path", train_args['datasets'][0]['folder_path'],
+        "--output_dir", train_args['training_folder'],
+        "--batch_size", str(train_args['train']['batch_size']),
+        "--num_train_steps", str(train_args['train']['steps']),
+        "--learning_rate", str(train_args['train']['lr']),
+        "--lora_rank", str(train_args['network']['linear']),
+        "--lora_alpha", str(train_args['network']['linear_alpha']),
+    ]
+    
+    if resume:
+        cmd.append("--resume_from_checkpoint")
+    
+    print(f"Running: {' '.join(cmd)}")
+    
+    try:
+        result = subprocess.run(cmd, check=True)
+        return result.returncode == 0
+    except subprocess.CalledProcessError as e:
+        print(f"Training failed with error: {e}")
+        # If diffusers training script doesn't exist, provide instructions
+        if not Path("train_lora_diffusers.py").exists():
+            print("\nERROR: Neither ai-toolkit nor train_lora_diffusers.py found.")
+            print("\nTo fix this, you have two options:")
+            print("\n1. Install ai-toolkit:")
+            print("   git clone https://github.com/ostris/ai-toolkit.git /workspace/hidream_finetune/ai-toolkit")
+            print("   cd /workspace/hidream_finetune/ai-toolkit")
+            print("   pip install -r requirements.txt")
+            print("\n2. Or create a custom training script (we can generate one if needed)")
         return False
     except KeyboardInterrupt:
         print("\nTraining interrupted by user")
