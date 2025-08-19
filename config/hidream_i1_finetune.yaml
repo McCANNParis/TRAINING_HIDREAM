@@ -1,61 +1,61 @@
-job:
-  extension: ai_toolkit.extensions.sd_trainer
-  extension_args:
-    process:
-      - type: "train"
-        training_folder: "output/hidream_i1_finetune"
-        device: "cuda:0"
-        trigger_word: "hidream_style"
-        network:
-          type: "lora"
-          linear: 16
-          linear_alpha: 16
-        save:
-          dtype: "float16"
-          save_every: 500
-          max_step_saves_to_keep: 4
-        datasets:
-          - folder_path: "input/dataset"
-            caption_ext: "txt"
-            caption_dropout_rate: 0.05
-            shuffle_tokens: false
-            cache_latents_to_disk: true
-            resolution: [1024, 1024]
-        train:
-          batch_size: 1
-          steps: 2000
-          gradient_accumulation_steps: 4
-          train_unet: true
-          train_text_encoder: false
-          gradient_checkpointing: true
-          noise_scheduler: "flowmatch"
-          optimizer: "adamw8bit"
-          lr: 0.0001
-          ema_config:
-            use_ema: true
-            ema_decay: 0.99
-          dtype: "bf16"
-          # Logging configuration - set to null to disable, or configure to enable
-          tracker: null  # Change to "wandb" to enable W&B logging
-          # To enable wandb, uncomment and configure:
-          # tracker: "wandb"
-          # tracker_project: "hidream-finetune"
-          # tracker_run_name: "hidream_i1_lora"
-          model:
-            name_or_path: "HiDream-ai/HiDream-I1-Fast"
-            is_flux: false
-            quantize: true
-          sample:
-            sampler: "flowmatch"
-            sample_every: 250
-            width: 1024
-            height: 1024
-            prompts:
-              - "a beautiful landscape with mountains and a lake, hidream_style"
-              - "a portrait of a person in artistic style, hidream_style"
-              - "a futuristic cityscape at night, hidream_style"
-            neg: ""
-            seed: 42
-            walk_seed: true
-            guidance_scale: 3.5
-            sample_steps: 16
+config:
+  name: "hidream_i1_finetune"
+  process:
+    - type: "train"
+      training_folder: "output/hidream_i1_finetune"
+      device: "cuda:0"
+      trigger_word: "hidream_still_edito"
+      network:
+        type: "lora"
+        linear: 16
+        linear_alpha: 16
+      save:
+        dtype: "float16"
+        save_every: 500
+        max_step_saves_to_keep: 4
+      datasets:
+        - folder_path: "dataset"  # Changed to use dataset folder in root
+          caption_ext: "txt"
+          caption_dropout_rate: 0.05
+          shuffle_tokens: false
+          cache_latents_to_disk: true
+          resolution: [1024, 1024]
+      train:
+        batch_size: 1
+        steps: 2000
+        gradient_accumulation_steps: 4
+        train_unet: true
+        train_text_encoder: false
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        optimizer: "adamw8bit"
+        lr: 0.0001
+        ema_config:
+          use_ema: true
+          ema_decay: 0.99
+        dtype: "bf16"
+        tracker: wandb
+        tracker_project: "hidream-finetune"
+        tracker_run_name: "hidream_i1_lora"
+      model:
+        name_or_path: "HiDream-ai/HiDream-I1-Fast"
+        is_flux: false
+        quantize: true
+      sample:
+        sampler: "flowmatch"
+        sample_every: 250
+        width: 1024
+        height: 1024
+        prompts:
+          - "a beautiful landscape with mountains and a lake, hidream_still_edito"
+          - "a portrait of a person in artistic style, hidream_still_edito"
+          - "a futuristic cityscape at night, hidream_still_edito"
+        neg: ""
+        seed: 42
+        walk_seed: true
+        guidance_scale: 3.5
+        sample_steps: 16
+
+meta:
+  name: "[hidream_i1_finetune]"
+  version: "1.0"
