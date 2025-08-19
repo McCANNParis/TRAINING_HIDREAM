@@ -1,61 +1,107 @@
+# HiDream-I1 LoRA Training Configuration
+# Optimized for RunPod L40S (48GB VRAM) or similar GPUs
+# Using HiDream-I1-Full model for best quality training
+
+---
+job: extension
 config:
+  # this name will be the folder and filename name
   name: "hidream_i1_finetune"
   process:
-    - type: "train"
-      training_folder: "output/hidream_i1_finetune"
-      device: "cuda:0"
+    - type: 'sd_trainer'
+      # root folder to save training sessions/samples/weights
+      training_folder: "output"
+      # uncomment to see performance stats in the terminal every N steps
+      performance_log_every: 100
+      device: cuda:0
+      # trigger word that will be added to captions if not present
       trigger_word: "hidream_still_edito"
       network:
         type: "lora"
         linear: 16
         linear_alpha: 16
+        network_kwargs:
+          # ignore mixture of experts as recommended
+          ignore_if_contains:
+            - "ff_i.experts"
+            - "ff_i.gate"
       save:
-        dtype: "float16"
-        save_every: 500
-        max_step_saves_to_keep: 4
+        dtype: bfloat16  # precision to save
+        save_every: 500  # save every this many steps
+        max_step_saves_to_keep: 4  # how many intermittent saves to keep
       datasets:
-        - folder_path: "dataset"  # Changed to use dataset folder in root
+        # using the dataset folder with paired images and captions
+        - folder_path: "dataset"
           caption_ext: "txt"
-          caption_dropout_rate: 0.05
+          caption_dropout_rate: 0.05  # will drop out the caption 5% of time
           shuffle_tokens: false
           cache_latents_to_disk: true
-          resolution: [1024, 1024]
+          resolution: [512, 768, 1024]  # hidream enjoys multiple resolutions
       train:
-        batch_size: 1
-        steps: 2000
-        gradient_accumulation_steps: 4
+        batch_size: 2  # can increase to 4 for L40S
+        steps: 2000  # total number of steps to train
+        gradient_accumulation_steps: 2
         train_unet: true
-        train_text_encoder: false
-        gradient_checkpointing: true
-        noise_scheduler: "flowmatch"
+        train_text_encoder: false  # won't work with hidream
+        gradient_checkpointing: true  # needed unless you have tons of vram
+        noise_scheduler: "flowmatch"  # for training only
+        timestep_type: shift  # sigmoid, shift, linear
         optimizer: "adamw8bit"
-        lr: 0.0001
+        lr: 1e-4
+        # uncomment to skip the pre training sample
+        # skip_first_sample: true
+        # uncomment to completely disable sampling
+        # disable_sampling: true
+        
+        # ema will smooth out learning
         ema_config:
           use_ema: true
           ema_decay: 0.99
-        dtype: "bf16"
-        tracker: wandb
-        tracker_project: "hidream-finetune"
-        tracker_run_name: "hidream_i1_lora"
+        
+        # bf16 is required for hidream
+        dtype: bf16
       model:
-        name_or_path: "HiDream-ai/HiDream-I1-Fast"
-        is_flux: false
-        quantize: true
+        # Using HiDream-I1-Full for best quality (requires more VRAM)
+        # For less VRAM, use "HiDream-ai/HiDream-I1-Fast" but quality may suffer
+        name_or_path: "HiDream-ai/HiDream-I1-Full"
+        extras_name_or_path: "HiDream-ai/HiDream-I1-Full"
+        arch: "hidream"
+        # Quantization settings - adjust based on VRAM
+        # L40S (48GB): can set both to false for better quality
+        # 24GB cards: keep both true
+        quantize: false  # set to true if less than 40GB VRAM
+        quantize_te: true  # text encoder quantization
+        model_kwargs:
+          # llama model for text encoding
+          llama_model_path: "unsloth/Meta-Llama-3.1-8B-Instruct"
       sample:
-        sampler: "flowmatch"
-        sample_every: 250
+        sampler: "flowmatch"  # must match train.noise_scheduler
+        sample_every: 250  # sample every this many steps
         width: 1024
         height: 1024
         prompts:
-          - "a beautiful landscape with mountains and a lake, hidream_still_edito"
-          - "a portrait of a person in artistic style, hidream_still_edito"
-          - "a futuristic cityscape at night, hidream_still_edito"
+          # sample prompts with trigger word
+          - "hidream_still_edito, a beautiful landscape with mountains and a lake at sunset"
+          - "hidream_still_edito, portrait of a person in artistic style with dramatic lighting"
+          - "hidream_still_edito, a futuristic cityscape at night with neon lights"
+          - "hidream_still_edito, woman with red hair playing chess at the park"
+          - "hidream_still_edito, a horse DJ at a night club with laser lights"
+          - "hidream_still_edito, a bear building a log cabin in snow covered mountains"
         neg: ""
         seed: 42
         walk_seed: true
-        guidance_scale: 3.5
-        sample_steps: 16
+        guidance_scale: 4
+        sample_steps: 25
+      
+      # Logging configuration
+      logging:
+        log_every: 10
+        use_wandb: true  # set to false to disable wandb
+        wandb_project: "hidream-finetune"
+        wandb_run_name: "hidream_i1_lora"
 
+# Additional metadata
 meta:
-  name: "[hidream_i1_finetune]"
-  version: "1.0"
+  name: "[name]"
+  version: '1.0'
+  description: "HiDream-I1 LoRA training configuration"
