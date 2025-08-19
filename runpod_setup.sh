@@ -169,7 +169,8 @@ pip install --no-cache-dir \
     wandb>=0.17.0 \
     Pillow>=10.4.0 \
     tqdm>=4.66.0 \
-    pyyaml>=6.0
+    pyyaml>=6.0 \
+    python-dotenv>=1.0.0
 
 # Install optimization libraries
 echo ""
