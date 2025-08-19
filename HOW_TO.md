@@ -45,11 +45,11 @@ chmod +x runpod_setup.sh
 # 3. Authenticate with Hugging Face
 huggingface-cli login
 
-# 4. Prepare your dataset
-python prepare_dataset.py /path/to/images --output input/dataset
+# 4. Your dataset is already prepared in the 'dataset' folder
+# with paired images and captions - ready to use!
 
 # 5. Start training with auto-optimization
-python train_hidream.py --auto-optimize
+python train_hidream.py --auto-optimize --dataset-path dataset
 ```
 
 ## Detailed Setup
@@ -116,42 +116,41 @@ This checks:
 
 ## Dataset Preparation
 
-### Preparing Images from a Folder
+### Using Your Pre-Prepared Dataset
 
-The simplest way to prepare your dataset:
+Your dataset is already prepared and located in the `dataset` folder at the root of the workspace. This folder contains:
+- Image files (JPEG/PNG)
+- Corresponding caption files (.txt) with the same name as each image
 
-```bash
-# Basic usage - processes all images in a folder
-python prepare_dataset.py /path/to/your/images --output input/dataset
-
-# With custom trigger word
-python prepare_dataset.py /path/to/images --output input/dataset --trigger-word "my_style"
-
-# With custom captions
-python prepare_dataset.py /path/to/images --output input/dataset --caption "a photo in my custom style"
+Example structure:
+```
+dataset/
+├── image001.jpg
+├── image001.txt  # Caption: "a beautiful landscape painting"
+├── image002.jpg
+├── image002.txt  # Caption: "portrait in dramatic lighting"
+└── ...
 ```
 
-### Preparing from JSON Metadata
+To use this dataset directly:
+```bash
+# Training with your existing dataset
+python train_hidream.py --auto-optimize --dataset-path dataset
 
-For more control over captions:
-
-1. Create a JSON file with your dataset metadata:
-```json
-[
-  {
-    "image": "path/to/image1.jpg",
-    "caption": "a beautiful landscape painting"
-  },
-  {
-    "image": "path/to/image2.jpg",
-    "caption": "portrait of a person in dramatic lighting"
-  }
-]
+# Or specify in the config file
+python train_hidream.py --config config/hidream_i1_finetune.yaml
 ```
 
-2. Process the dataset:
+### Optional: Preparing Additional Datasets
+
+If you need to prepare additional images:
+
 ```bash
-python prepare_dataset.py dataset.json --output input/dataset --trigger-word "my_style"
+# Process new images and add to existing dataset
+python prepare_dataset.py /path/to/new/images --output dataset --append
+
+# With custom trigger word for style consistency
+python prepare_dataset.py /path/to/images --output dataset --trigger-word "my_style" --append
 ```
 
 ### Dataset Requirements
@@ -179,10 +178,11 @@ Example captions:
 
 ### Automatic Training (Recommended)
 
-The easiest way to start training with GPU-optimized settings:
+The easiest way to start training with GPU-optimized settings using your prepared dataset:
 
 ```bash
-python train_hidream.py --auto-optimize
+# Use the dataset folder in your workspace
+python train_hidream.py --auto-optimize --dataset-path dataset
 ```
 
 This automatically:
@@ -201,6 +201,10 @@ model:
   revision: "main"
   is_hidream: true
 
+dataset:
+  name_or_path: "dataset"          # Your prepared dataset folder
+  caption_column: "text"           # Column name for captions
+  
 train:
   batch_size: 2                    # Adjust based on VRAM
   gradient_accumulation_steps: 2   # Increase if batch_size is small
@@ -221,19 +225,19 @@ python train_hidream.py --config config/hidream_i1_finetune.yaml
 
 #### NVIDIA L40S (48GB)
 ```bash
-python train_hidream.py --auto-optimize  # Automatically uses optimal L40S settings
+python train_hidream.py --auto-optimize --dataset-path dataset  # Automatically uses optimal L40S settings
 # Or manually:
-python train_hidream.py --batch-size 4 --steps 3000 --model HiDream-I1-Dev
+python train_hidream.py --batch-size 4 --steps 3000 --model HiDream-I1-Dev --dataset-path dataset
 ```
 
 #### RTX 4090/3090 (24GB)
 ```bash
-python train_hidream.py --batch-size 1 --gradient-accumulation 4 --model HiDream-I1-Fast
+python train_hidream.py --batch-size 1 --gradient-accumulation 4 --model HiDream-I1-Fast --dataset-path dataset
 ```
 
 #### Lower VRAM GPUs (16GB)
 ```bash
-python train_hidream.py --batch-size 1 --gradient-accumulation 8 --model HiDream-I1-Fast --use-8bit
+python train_hidream.py --batch-size 1 --gradient-accumulation 8 --model HiDream-I1-Fast --use-8bit --dataset-path dataset
 ```
 
 ### Resume Training from Checkpoint
@@ -241,11 +245,11 @@ python train_hidream.py --batch-size 1 --gradient-accumulation 8 --model HiDream
 If training is interrupted:
 
 ```bash
-# Automatically finds latest checkpoint
-python train_hidream.py --resume
+# Automatically finds latest checkpoint and continues with your dataset
+python train_hidream.py --resume --dataset-path dataset
 
 # Or specify checkpoint directory
-python train_hidream.py --resume --checkpoint-dir output/hidream_i1_finetune/checkpoint-1000
+python train_hidream.py --resume --checkpoint-dir output/hidream_i1_finetune/checkpoint-1000 --dataset-path dataset
 ```
 
 ## RunPod Deployment
@@ -386,13 +390,13 @@ pipe.save_pretrained("my-hidream-model")
 #### CUDA Out of Memory
 ```bash
 # Solution 1: Reduce batch size
-python train_hidream.py --batch-size 1 --gradient-accumulation 8
+python train_hidream.py --batch-size 1 --gradient-accumulation 8 --dataset-path dataset
 
 # Solution 2: Use smaller model
-python train_hidream.py --model HiDream-I1-Fast
+python train_hidream.py --model HiDream-I1-Fast --dataset-path dataset
 
 # Solution 3: Enable 8-bit optimization
-python train_hidream.py --use-8bit
+python train_hidream.py --use-8bit --dataset-path dataset
 
 # Solution 4: Clear GPU memory
 nvidia-smi
@@ -417,8 +421,8 @@ huggingface-cli login
 
 #### Slow Training Speed
 ```bash
-# Enable optimizations
-python train_hidream.py --auto-optimize --enable-xformers
+# Enable optimizations with your dataset
+python train_hidream.py --auto-optimize --enable-xformers --dataset-path dataset
 
 # Check GPU utilization
 nvidia-smi -l 1  # Monitor GPU usage
@@ -457,8 +461,8 @@ python -c "import torch; print(torch.cuda.is_available())"
 
 ### Multi-GPU Training
 ```bash
-# Use multiple GPUs (experimental)
-torchrun --nproc_per_node=2 train_hidream.py --auto-optimize
+# Use multiple GPUs with your dataset (experimental)
+torchrun --nproc_per_node=2 train_hidream.py --auto-optimize --dataset-path dataset
 ```
 
 ### Custom Schedulers
@@ -474,12 +478,20 @@ noise_scheduler:
 - **Default (16)**: Good balance
 - **Higher rank (32)**: More parameters, risk of overfitting
 
-### Batch Processing Datasets
+### Working with Your Dataset
+
 ```bash
-# Process multiple image folders
-for folder in style1 style2 style3; do
-    python prepare_dataset.py $folder --output input/$folder
-done
+# Check your dataset structure
+ls -la dataset/ | head -20
+
+# Count image-caption pairs
+echo "Total images: $(ls dataset/*.jpg dataset/*.png 2>/dev/null | wc -l)"
+echo "Total captions: $(ls dataset/*.txt 2>/dev/null | wc -l)"
+
+# Verify caption content
+for file in dataset/*.txt; do
+    echo "$(basename $file): $(cat $file)"
+done | head -5
 ```
 
 ## Performance Benchmarks
