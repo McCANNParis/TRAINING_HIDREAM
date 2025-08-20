@@ -273,17 +273,35 @@ else
     echo -e "${GREEN}All Python packages already installed!${NC}"
 fi
 
-# Try to install Flash Attention (optional)
+# Try to install Flash Attention (optional but with version check)
 echo ""
 echo -e "${BLUE}Checking Flash Attention:${NC}"
 if python -c "import flash_attn" 2>/dev/null; then
-    echo -e "  ${GREEN}✓${NC} Flash Attention already installed"
+    FLASH_VERSION=$(python -c "import flash_attn; print(flash_attn.__version__)" 2>/dev/null || echo "unknown")
+    echo "  Current Flash Attention version: $FLASH_VERSION"
+    
+    # Check if version is compatible with xformers (2.7.1-2.8.2)
+    if python -c "from packaging import version; v = version.parse('$FLASH_VERSION'); exit(0 if version.parse('2.7.1') <= v <= version.parse('2.8.2') else 1)" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Flash Attention $FLASH_VERSION is compatible with xformers"
+    else
+        echo -e "  ${YELLOW}⚠${NC} Flash Attention $FLASH_VERSION is incompatible with xformers"
+        echo "  Installing compatible version (2.8.2)..."
+        pip uninstall flash-attn -y 2>/dev/null
+        if pip install flash-attn==2.8.2 --no-build-isolation 2>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} Flash Attention 2.8.2 installed successfully"
+        else
+            echo -e "  ${YELLOW}⚠${NC} Failed to install Flash Attention 2.8.2"
+            echo "  Training will work but may be slower without Flash Attention"
+        fi
+    fi
 else
-    echo "  Attempting Flash Attention installation..."
-    if pip install flash-attn --no-build-isolation 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} Flash Attention installed successfully"
+    echo "  Flash Attention not installed, attempting installation..."
+    # Install specific version compatible with xformers
+    if pip install flash-attn==2.8.2 --no-build-isolation 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Flash Attention 2.8.2 installed successfully"
     else
         echo -e "  ${YELLOW}⚠${NC} Flash Attention installation failed (optional - training will still work)"
+        echo "  You can try: pip install flash-attn==2.8.2 --no-build-isolation"
     fi
 fi
 

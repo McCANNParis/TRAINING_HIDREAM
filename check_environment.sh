@@ -156,6 +156,21 @@ check_python_package "peft" "PEFT (LoRA support)" || OVERALL_STATUS=1
 
 # Memory optimization
 check_python_package "xformers" "XFormers (memory optimization)" || echo -e "${YELLOW}⚠${NC}  XFormers recommended for memory efficiency"
+
+# Check Flash Attention version specifically
+if python -c "import flash_attn" 2>/dev/null; then
+    FLASH_VERSION=$(python -c "import flash_attn; print(flash_attn.__version__)" 2>/dev/null || echo "unknown")
+    # Check if version is between 2.7.1 and 2.8.2
+    if python -c "from packaging import version; v = version.parse('$FLASH_VERSION'); exit(0 if version.parse('2.7.1') <= v <= version.parse('2.8.2') else 1)" 2>/dev/null; then
+        echo -e "${GREEN}✓${NC} Flash Attention: $FLASH_VERSION (compatible)"
+    else
+        echo -e "${YELLOW}⚠${NC}  Flash Attention: $FLASH_VERSION (incompatible - needs 2.7.1-2.8.2)"
+        echo "     Run: pip install flash-attn==2.8.2 --no-build-isolation"
+    fi
+else
+    echo -e "${YELLOW}⚠${NC}  Flash Attention not installed (optional but recommended)"
+fi
+
 check_python_package "bitsandbytes" "BitsAndBytes (8-bit optimizer)" || echo -e "${YELLOW}⚠${NC}  BitsAndBytes recommended for optimizer efficiency"
 
 # Monitoring tools
