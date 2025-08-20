@@ -1,92 +1,120 @@
-# HiDream-I1 LoRA Training Configuration
-# Optimized for RunPod L40S (48GB VRAM) or similar GPUs
-# Using HiDream-I1-Full model for best quality training
-
 ---
 job: extension
 config:
-  # this name will be the folder and filename name
+  # This name will be the folder for checkpoints/samples and the base filename for the LoRA.
   name: "hidream_i1_finetune"
+  # Root folder to save all training outputs.
+  training_folder: "output"
+  device: 'cuda'
+  # For tensorboard logging.
+  log_dir: "output/.tensorboard"
   process:
     - type: 'sd_trainer'
-      # root folder to save training sessions/samples/weights
-      training_folder: "output"
-      # uncomment to see performance stats in the terminal every N steps
-      performance_log_every: 100
-      device: cuda:0
-      # trigger word that will be added to captions if not present
-      trigger_word: "hidream_still_edito"
+      # The base model for fine-tuning.
+      model:
+        # Use the full, non-distilled version for maximum quality.
+        name_or_path: "HiDream-ai/HiDream-I1-Full"
+        # CRITICAL: Tells the toolkit to use FLUX-compatible logic for the VAE.
+        is_flux: true
+        # Quantizes the model to 8-bit during loading to fit in VRAM.
+        quantize: false  # Set to false for L40S with 48GB VRAM
+        # Set to true only if your training GPU is also driving your monitor.
+        low_vram: false
+      # LoRA network configuration.
       network:
         type: "lora"
-        linear: 16
-        linear_alpha: 16
-        network_kwargs:
-          # ignore mixture of experts as recommended
-          ignore_if_contains:
-            - "ff_i.experts"
-            - "ff_i.gate"
+        # Moderate rank for good quality/efficiency balance
+        rank: 16
+        # Standard practice is to set alpha equal to rank
+        alpha: 16
+        # Surgical targeting of DiT attention and MLP layers, excluding text encoders.
+        target_modules:
+          - "q_proj"
+          - "k_proj"
+          - "v_proj"
+          - "o_proj"
+          - "gate_proj"
+          - "down_proj"
+          - "up_proj"
+      # Optimizer settings.
+      optimizer:
+        type: "adamw8bit"  # Using 8-bit AdamW for memory efficiency
+        # A balanced learning rate for a large model and constant scheduler.
+        learning_rate: 1.0e-4  # 0.0001
+        # A simple and stable scheduler is preferred for isolating LR impact.
+        lr_scheduler: "constant"
+        lr_warmup_steps: 0
+      # Core training parameters.
+      train:
+        # Total number of training steps
+        steps: 2000
+        # Batch size - can increase to 4 for L40S
+        batch_size: 2
+        # Gradient accumulation for effective larger batch size
+        gradient_accumulation_steps: 2
+        # bf16 is essential for stability and performance on modern GPUs.
+        dtype: 'bf16'
+        # Save checkpoints periodically to evaluate and avoid overfitting.
+        save_every: 500
+        # Maximum intermediate saves to keep
+        max_step_saves_to_keep: 4
+        # Skip the pre-training sample
+        skip_first_sample: true
+        # Disable sampling since we don't want to generate images during training
+        disable_sampling: true
+        # Enable gradient checkpointing for memory efficiency
+        gradient_checkpointing: true
+        # Noise scheduler for HiDream
+        noise_scheduler: "flowmatch"
+        # Timestep type
+        timestep_type: "shift"
+        # Train only the UNet, not text encoder
+        train_unet: true
+        train_text_encoder: false
+        # Recommended to leave on for smoother learning.
+        ema_config:
+          use_ema: true
+          ema_decay: 0.99
+        # WandB logging configuration
+        use_wandb: true
+        wandb_project: "hidream-finetune"
+        wandb_run_name: "hidream_i1_lora"
+      # Dataset configuration.
+      dataset:
+        # A list of datasets can be provided.
+        datasets:
+          - folder_path: "/workspace/ai-toolkit/assets"
+            caption_ext: "txt"
+            # Small dropout for robustness
+            caption_dropout_rate: 0.05
+            # Do not shuffle tokens in structured captions.
+            shuffle_tokens: false
+            # Cache latents for faster training
+            cache_latents_to_disk: true
+            # Multiple resolutions for HiDream
+            resolution: [512, 768, 1024]
+      # Sample generation disabled - uncomment if you want to generate samples
+      # sample:
+      #   # Sampler must be flowmatch for FLUX/HiDream architectures.
+      #   sampler: "flowmatch"
+      #   # Generate samples frequently to monitor progress.
+      #   sample_every: 250
+      #   width: 1024
+      #   height: 1024
+      #   prompts:
+      #     - "hidream_still_edito, your prompt here"
+      
+      # Additional configuration
+      trigger_word: "hidream_still_edito"
+      performance_log_every: 100
+      
+      # Save settings
       save:
         dtype: bfloat16  # precision to save
         save_every: 500  # save every this many steps
         max_step_saves_to_keep: 4  # how many intermittent saves to keep
-      datasets:
-        # using the dataset folder with paired images and captions
-        - folder_path: "dataset"
-          caption_ext: "txt"
-          caption_dropout_rate: 0.05  # will drop out the caption 5% of time
-          shuffle_tokens: false
-          cache_latents_to_disk: true
-          resolution: [512, 768, 1024]  # hidream enjoys multiple resolutions
-      train:
-        batch_size: 2  # can increase to 4 for L40S
-        steps: 2000  # total number of steps to train
-        gradient_accumulation_steps: 2
-        train_unet: true
-        train_text_encoder: false  # won't work with hidream
-        gradient_checkpointing: true  # needed unless you have tons of vram
-        noise_scheduler: "flowmatch"  # for training only
-        timestep_type: shift  # sigmoid, shift, linear
-        optimizer: "adamw8bit"
-        lr: 1e-4
-        # skip the pre training sample
-        skip_first_sample: true
-        # disable sampling since we don't have prompts
-        disable_sampling: true
-        
-        # ema will smooth out learning
-        ema_config:
-          use_ema: true
-          ema_decay: 0.99
-        
-        # bf16 is required for hidream
-        dtype: bf16
-        
-        # WandB logging in train section
-        use_wandb: true
-        wandb_project: "hidream-finetune"
-        wandb_run_name: "hidream_i1_lora"
-      model:
-        # Using HiDream-I1-Full for best quality (requires more VRAM)
-        # For less VRAM, use "HiDream-ai/HiDream-I1-Fast" but quality may suffer
-        name_or_path: "HiDream-ai/HiDream-I1-Full"
-        extras_name_or_path: "HiDream-ai/HiDream-I1-Full"
-        arch: "hidream"
-        # Quantization settings - adjust based on VRAM
-        # L40S (48GB): can set both to false for better quality
-        # 24GB cards: keep both true
-        quantize: false  # set to true if less than 40GB VRAM
-        quantize_te: true  # text encoder quantization
-        model_kwargs:
-          # llama model for text encoding
-          llama_model_path: "unsloth/Meta-Llama-3.1-8B-Instruct"
-      # Sampling disabled - no prompts needed
-      # sample:
-      #   sampler: "flowmatch"
-      #   sample_every: 250
-      #   width: 1024
-      #   height: 1024
       
-      # WandB logging configuration
+      # WandB logging configuration (alternative location)
       wandb:
         enabled: true
         project: "hidream-finetune"
@@ -98,6 +126,6 @@ config:
 
 # Additional metadata
 meta:
-  name: "[name]"
+  name: "hidream_i1_finetune"
   version: '1.0'
-  description: "HiDream-I1 LoRA training configuration"
+  description: "HiDream-I1 LoRA training configuration optimized for L40S"
