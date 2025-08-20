@@ -60,16 +60,21 @@ def check_dependencies():
     
     return True
 
-def optimize_config_for_vram(config_path: Path, vram_gb: float, gpu_name: str = "") -> Dict[str, Any]:
+def optimize_config_for_vram(config_path: Path, vram_gb: float, gpu_name: str = "", dataset_path: Path = None) -> Dict[str, Any]:
     """
     Optimize training configuration based on available VRAM.
     Special optimizations for L40S GPU (48GB VRAM).
+    Updates dataset path if provided.
     """
     with open(config_path, 'r') as f:
         import yaml
         config = yaml.safe_load(f)
     
     train_config = config['job']['extension_args']['process'][0]['train']
+    
+    # Update dataset path if provided
+    if dataset_path:
+        config['job']['extension_args']['process'][0]['datasets'][0]['folder_path'] = str(dataset_path)
     
     # L40S specific optimizations (48GB VRAM)
     if "L40S" in gpu_name or "L40" in gpu_name or vram_gb >= 40:
@@ -145,10 +150,25 @@ def validate_dataset(dataset_path: Path) -> bool:
     
     return True
 
-def run_training(config_path: Path, resume: bool = False):
+def run_training(config_path: Path, resume: bool = False, dataset_path: Path = None):
     """
     Run the training process using ai-toolkit.
+    Updates config with dataset path if provided.
     """
+    # Update config file with dataset path if needed
+    if dataset_path:
+        import yaml
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        # Update dataset path in config
+        config['job']['extension_args']['process'][0]['datasets'][0]['folder_path'] = str(dataset_path)
+        
+        # Save updated config
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f)
+        print(f"Updated config with dataset path: {dataset_path}")
+    
     # Check multiple possible ai-toolkit locations
     ai_toolkit_paths = [
         Path("/workspace/ai-toolkit"),  # Main workspace location
@@ -256,8 +276,13 @@ def main():
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=Path("input/dataset"),
-        help="Path to dataset directory"
+        default=None,
+        help="Path to dataset directory (defaults to workspace/ai-toolkit/assets or input/dataset)"
+    )
+    parser.add_argument(
+        "--use-workspace-dataset",
+        action="store_true",
+        help="Use dataset from workspace/ai-toolkit/assets"
     )
     parser.add_argument(
         "--resume",
@@ -277,9 +302,53 @@ def main():
     
     args = parser.parse_args()
     
+    # Determine dataset path
+    if args.dataset:
+        # User specified a custom path
+        dataset_path = args.dataset
+    elif args.use_workspace_dataset:
+        # Use workspace/ai-toolkit/assets
+        dataset_path = Path("/workspace/ai-toolkit/assets")
+        if not dataset_path.exists():
+            # Try alternative workspace paths
+            alt_paths = [
+                Path("workspace/ai-toolkit/assets"),
+                Path("../workspace/ai-toolkit/assets"),
+                Path("../../workspace/ai-toolkit/assets")
+            ]
+            for alt_path in alt_paths:
+                if alt_path.exists():
+                    dataset_path = alt_path.resolve()
+                    break
+    else:
+        # Default behavior: check workspace first, then fall back to input/dataset
+        workspace_path = Path("/workspace/ai-toolkit/assets")
+        local_path = Path("input/dataset")
+        
+        if workspace_path.exists():
+            dataset_path = workspace_path
+            print(f"Using workspace dataset: {dataset_path}")
+        elif local_path.exists():
+            dataset_path = local_path
+            print(f"Using local dataset: {dataset_path}")
+        else:
+            # Try to find workspace path relative to current location
+            alt_paths = [
+                Path("workspace/ai-toolkit/assets"),
+                Path("../workspace/ai-toolkit/assets"),
+                Path("../../workspace/ai-toolkit/assets")
+            ]
+            dataset_path = local_path  # Default
+            for alt_path in alt_paths:
+                if alt_path.exists():
+                    dataset_path = alt_path.resolve()
+                    print(f"Found workspace dataset at: {dataset_path}")
+                    break
+    
     print("="*50)
     print("HiDream-I1 Finetuning Setup")
     print("="*50)
+    print(f"Dataset path: {dataset_path}")
     
     # Check GPU
     if not check_gpu():
@@ -290,7 +359,7 @@ def main():
         return 1
     
     # Validate dataset
-    if not validate_dataset(args.dataset):
+    if not validate_dataset(dataset_path):
         return 1
     
     # Auto-optimize if requested
@@ -298,7 +367,7 @@ def main():
         props = torch.cuda.get_device_properties(0)
         vram_gb = props.total_memory / 1024**3
         gpu_name = props.name
-        config = optimize_config_for_vram(args.config, vram_gb, gpu_name)
+        config = optimize_config_for_vram(args.config, vram_gb, gpu_name, dataset_path)
         
         # Save optimized config
         optimized_path = args.config.parent / f"{args.config.stem}_optimized.yaml"
@@ -318,7 +387,7 @@ def main():
     print("Starting training...")
     print("="*50)
     
-    success = run_training(args.config, args.resume)
+    success = run_training(args.config, args.resume, dataset_path)
     
     if success:
         print("\n" + "="*50)
