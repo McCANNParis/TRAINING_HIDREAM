@@ -1,23 +1,81 @@
 #!/bin/bash
 
 echo "==================================================="
-echo "HiDream-I1 Finetuning Setup"
+echo "HiDream-I1 Finetuning Setup - Optimized for RunPod"
 echo "==================================================="
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Track what needs to be installed
+declare -a MISSING_SYSTEM_PACKAGES=()
+declare -a MISSING_PYTHON_PACKAGES=()
+NEEDS_PYTORCH_UPDATE=false
 
 # Function to check if running in RunPod
 check_runpod() {
     if [ -n "$RUNPOD_POD_ID" ] || [ -d "/workspace" ]; then
-        echo "✓ RunPod environment detected"
+        echo -e "${GREEN}✓${NC} RunPod environment detected (Pod ID: ${RUNPOD_POD_ID:-unknown})"
         return 0
     else
-        echo "⚠ Not running in RunPod - adjusting paths for local setup"
+        echo -e "${YELLOW}⚠${NC} Not running in RunPod - adjusting paths for local setup"
+        return 1
+    fi
+}
+
+# Function to check if a system package is installed
+check_system_package() {
+    local package=$1
+    if dpkg -l "$package" 2>/dev/null | grep -q "^ii"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to check Python package with version
+check_python_package() {
+    local package=$1
+    local min_version=$2
+    local import_name=${3:-$package}
+    
+    # Handle special import names
+    if [ "$import_name" = "PIL" ]; then
+        import_name="PIL"
+        version_check="import PIL; print(PIL.__version__)"
+    else
+        version_check="import $import_name; print($import_name.__version__ if hasattr($import_name, '__version__') else 'unknown')"
+    fi
+    
+    if python -c "import $import_name" 2>/dev/null; then
+        local installed_version=$(python -c "$version_check" 2>/dev/null || echo "unknown")
+        
+        if [ -n "$min_version" ] && [ "$installed_version" != "unknown" ]; then
+            # Simple version comparison (may need refinement for complex cases)
+            if python -c "from packaging import version; exit(0 if version.parse('$installed_version') >= version.parse('$min_version') else 1)" 2>/dev/null; then
+                echo -e "  ${GREEN}✓${NC} $package ($installed_version)"
+                return 0
+            else
+                echo -e "  ${YELLOW}⚠${NC} $package ($installed_version) - needs update to >=$min_version"
+                return 1
+            fi
+        else
+            echo -e "  ${GREEN}✓${NC} $package ($installed_version)"
+            return 0
+        fi
+    else
+        echo -e "  ${RED}✗${NC} $package - not installed"
         return 1
     fi
 }
 
 # Detect and display GPU information
 echo ""
-echo "GPU Detection:"
+echo -e "${BLUE}GPU Detection:${NC}"
 if command -v nvidia-smi &> /dev/null; then
     GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
     echo "Found $GPU_COUNT GPU(s)"
@@ -29,7 +87,7 @@ if command -v nvidia-smi &> /dev/null; then
     
     # Check for L40S and set optimizations
     if nvidia-smi --query-gpu=name --format=csv,noheader | grep -q "L40"; then
-        echo "  ✓ NVIDIA L40S detected - Excellent for training with 48GB VRAM"
+        echo -e "  ${GREEN}✓${NC} NVIDIA L40S detected - Excellent for training with 48GB VRAM"
         export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
         export CUDA_LAUNCH_BLOCKING=0
         IS_L40S=true
@@ -37,50 +95,40 @@ if command -v nvidia-smi &> /dev/null; then
         IS_L40S=false
     fi
 else
-    echo "ERROR: nvidia-smi not found. Please ensure NVIDIA drivers are installed."
+    echo -e "${RED}ERROR: nvidia-smi not found. Please ensure NVIDIA drivers are installed.${NC}"
     exit 1
 fi
 
-# Update system packages only if we have sudo/root access
-if [ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null; then
-    echo ""
-    echo "Installing system dependencies..."
-    if [ "$EUID" -eq 0 ]; then
-        apt-get update && apt-get install -y \
-            git \
-            wget \
-            curl \
-            python3-pip \
-            python3-dev \
-            python3-venv \
-            build-essential \
-            libgl1-mesa-glx \
-            libglib2.0-0 \
-            libsm6 \
-            libxext6 \
-            libxrender-dev \
-            libgomp1 \
-            bc
+# Check system packages
+echo ""
+echo -e "${BLUE}Checking system packages:${NC}"
+SYSTEM_PACKAGES=("git" "wget" "curl" "python3-pip" "python3-dev" "python3-venv" "build-essential" "libgl1-mesa-glx" "libglib2.0-0" "libsm6" "libxext6" "libxrender-dev" "libgomp1" "bc")
+
+for pkg in "${SYSTEM_PACKAGES[@]}"; do
+    if check_system_package "$pkg"; then
+        echo -e "  ${GREEN}✓${NC} $pkg"
     else
-        sudo apt-get update && sudo apt-get install -y \
-            git \
-            wget \
-            curl \
-            python3-pip \
-            python3-dev \
-            python3-venv \
-            build-essential \
-            libgl1-mesa-glx \
-            libglib2.0-0 \
-            libsm6 \
-            libxext6 \
-            libxrender-dev \
-            libgomp1 \
-            bc
+        echo -e "  ${RED}✗${NC} $pkg - will install"
+        MISSING_SYSTEM_PACKAGES+=("$pkg")
+    fi
+done
+
+# Install missing system packages if any
+if [ ${#MISSING_SYSTEM_PACKAGES[@]} -gt 0 ]; then
+    if [ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null; then
+        echo ""
+        echo -e "${YELLOW}Installing ${#MISSING_SYSTEM_PACKAGES[@]} missing system packages...${NC}"
+        if [ "$EUID" -eq 0 ]; then
+            apt-get update && apt-get install -y "${MISSING_SYSTEM_PACKAGES[@]}"
+        else
+            sudo apt-get update && sudo apt-get install -y "${MISSING_SYSTEM_PACKAGES[@]}"
+        fi
+    else
+        echo -e "${YELLOW}⚠ No sudo access - cannot install system packages${NC}"
+        echo "Missing packages: ${MISSING_SYSTEM_PACKAGES[*]}"
     fi
 else
-    echo "⚠ No sudo access - skipping system package installation"
-    echo "  Assuming packages are pre-installed in container"
+    echo -e "${GREEN}All system packages already installed!${NC}"
 fi
 
 # Set up working directory based on environment
@@ -95,7 +143,7 @@ echo "Working directory: $WORK_DIR"
 
 # Check if we're already in the project directory
 if [ -f "$WORK_DIR/train_hidream.py" ]; then
-    echo "✓ Already in project directory"
+    echo -e "${GREEN}✓${NC} Already in project directory"
     cd "$WORK_DIR"
 else
     mkdir -p "$WORK_DIR"
@@ -104,96 +152,139 @@ fi
 
 # Check Python version
 echo ""
-echo "Python environment check:"
+echo -e "${BLUE}Python environment check:${NC}"
 PYTHON_CMD="python3"
 if command -v python3.11 &> /dev/null; then
     PYTHON_CMD="python3.11"
-    echo "✓ Using Python 3.11"
+    echo -e "${GREEN}✓${NC} Using Python 3.11"
 elif command -v python3.10 &> /dev/null; then
     PYTHON_CMD="python3.10"
-    echo "✓ Using Python 3.10"
+    echo -e "${GREEN}✓${NC} Using Python 3.10"
 else
-    echo "✓ Using system Python 3"
+    echo -e "${GREEN}✓${NC} Using system Python 3"
 fi
 
 $PYTHON_CMD --version
 
-# Upgrade pip first
-echo ""
-echo "Upgrading pip..."
-$PYTHON_CMD -m pip install --upgrade pip setuptools wheel
+# First install packaging for version comparison
+pip install -q packaging 2>/dev/null
 
-# Install PyTorch with appropriate CUDA version
+# Check CUDA and PyTorch status
 echo ""
-echo "Installing PyTorch..."
-
-# Check CUDA version
-if command -v nvcc &> /dev/null; then
-    CUDA_VERSION=$(nvcc --version | grep "release" | sed 's/.*release //' | sed 's/,.*//')
-    echo "CUDA Version: $CUDA_VERSION"
+echo -e "${BLUE}PyTorch and CUDA check:${NC}"
+if python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+    CUDA_VERSION=$(python -c "import torch; print(torch.version.cuda)")
+    TORCH_VERSION=$(python -c "import torch; print(torch.__version__)")
+    echo -e "  ${GREEN}✓${NC} PyTorch $TORCH_VERSION with CUDA $CUDA_VERSION"
+    
+    # Check if we need correct CUDA version
+    if command -v nvcc &> /dev/null; then
+        SYSTEM_CUDA=$(nvcc --version | grep "release" | sed 's/.*release //' | sed 's/,.*//')
+        if [[ "$SYSTEM_CUDA" == "12.4"* ]] && [[ "$CUDA_VERSION" != "12."* ]]; then
+            echo -e "  ${YELLOW}⚠${NC} PyTorch CUDA version mismatch - will reinstall"
+            NEEDS_PYTORCH_UPDATE=true
+        fi
+    fi
 else
-    echo "CUDA compiler not found, using runtime version"
-    CUDA_VERSION="12.1"
+    echo -e "  ${RED}✗${NC} PyTorch not installed or CUDA not available"
+    NEEDS_PYTORCH_UPDATE=true
 fi
 
-# Install PyTorch based on CUDA version
-if [[ "$CUDA_VERSION" == "12.4"* ]]; then
-    echo "Installing PyTorch for CUDA 12.4..."
-    pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
-elif [[ "$CUDA_VERSION" == "12.1"* ]] || [[ "$CUDA_VERSION" == "12.2"* ]] || [[ "$CUDA_VERSION" == "12.3"* ]]; then
-    echo "Installing PyTorch for CUDA 12.1..."
-    pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
-else
-    echo "Installing PyTorch for CUDA 11.8 (fallback)..."
-    pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu118
+# Check Python packages
+echo ""
+echo -e "${BLUE}Checking Python packages:${NC}"
+
+# Define required packages with versions and import names
+declare -A PYTHON_PACKAGES=(
+    ["transformers>=4.44.0"]="transformers"
+    ["diffusers>=0.30.0"]="diffusers"
+    ["accelerate>=0.34.0"]="accelerate"
+    ["safetensors>=0.4.5"]="safetensors"
+    ["huggingface-hub>=0.24.0"]="huggingface_hub"
+    ["datasets>=2.20.0"]="datasets"
+    ["omegaconf>=2.3.0"]="omegaconf"
+    ["einops>=0.8.0"]="einops"
+    ["tensorboard>=2.17.0"]="tensorboard"
+    ["wandb>=0.17.0"]="wandb"
+    ["Pillow>=10.4.0"]="PIL"
+    ["tqdm>=4.66.0"]="tqdm"
+    ["pyyaml>=6.0"]="yaml"
+    ["oyaml>=1.0"]="oyaml"
+    ["python-dotenv>=1.0.0"]="dotenv"
+    ["lycoris-lora>=2.2.0"]="lycoris"
+    ["prodigyopt>=1.0"]="prodigyopt"
+    ["bitsandbytes>=0.43.0"]="bitsandbytes"
+    ["xformers>=0.0.27"]="xformers"
+)
+
+for pkg_spec in "${!PYTHON_PACKAGES[@]}"; do
+    import_name="${PYTHON_PACKAGES[$pkg_spec]}"
+    pkg_name=$(echo "$pkg_spec" | cut -d'>' -f1 | cut -d'=' -f1)
+    min_version=$(echo "$pkg_spec" | grep -oP '(?<=>)=[\d.]+' | cut -d'=' -f2)
+    
+    if ! check_python_package "$pkg_name" "$min_version" "$import_name"; then
+        MISSING_PYTHON_PACKAGES+=("$pkg_spec")
+    fi
+done
+
+# Upgrade pip if needed
+echo ""
+if [ ${#MISSING_PYTHON_PACKAGES[@]} -gt 0 ] || [ "$NEEDS_PYTORCH_UPDATE" = true ]; then
+    echo -e "${YELLOW}Upgrading pip...${NC}"
+    $PYTHON_CMD -m pip install --upgrade pip setuptools wheel
 fi
 
-# Install core dependencies first
-echo ""
-echo "Installing core ML dependencies..."
-pip install --no-cache-dir \
-    transformers>=4.44.0 \
-    diffusers>=0.30.0 \
-    accelerate>=0.34.0 \
-    safetensors>=0.4.5 \
-    huggingface-hub>=0.24.0 \
-    datasets>=2.20.0
+# Install PyTorch if needed
+if [ "$NEEDS_PYTORCH_UPDATE" = true ]; then
+    echo ""
+    echo -e "${YELLOW}Installing/Updating PyTorch...${NC}"
+    
+    # Check CUDA version
+    if command -v nvcc &> /dev/null; then
+        CUDA_VERSION=$(nvcc --version | grep "release" | sed 's/.*release //' | sed 's/,.*//')
+        echo "System CUDA Version: $CUDA_VERSION"
+    else
+        echo "CUDA compiler not found, using runtime version"
+        CUDA_VERSION="12.1"
+    fi
+    
+    # Install PyTorch based on CUDA version
+    if [[ "$CUDA_VERSION" == "12.4"* ]]; then
+        echo "Installing PyTorch for CUDA 12.4..."
+        pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
+    elif [[ "$CUDA_VERSION" == "12.1"* ]] || [[ "$CUDA_VERSION" == "12.2"* ]] || [[ "$CUDA_VERSION" == "12.3"* ]]; then
+        echo "Installing PyTorch for CUDA 12.1..."
+        pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
+    else
+        echo "Installing PyTorch for CUDA 11.8 (fallback)..."
+        pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu118
+    fi
+fi
 
-# Install training dependencies
-echo ""
-echo "Installing training dependencies..."
-pip install --no-cache-dir \
-    omegaconf>=2.3.0 \
-    einops>=0.8.0 \
-    tensorboard>=2.17.0 \
-    wandb>=0.17.0 \
-    Pillow>=10.4.0 \
-    tqdm>=4.66.0 \
-    pyyaml>=6.0 \
-    oyaml>=1.0 \
-    python-dotenv>=1.0.0 \
-    lycoris-lora>=2.2.0 \
-    prodigyopt>=1.0
-
-# Install optimization libraries
-echo ""
-echo "Installing optimization libraries..."
-
-# Install bitsandbytes
-echo "Installing bitsandbytes..."
-pip install --no-cache-dir bitsandbytes>=0.43.0
-
-# Install xformers (memory efficient attention)
-echo "Installing xformers..."
-pip install --no-cache-dir xformers>=0.0.27
-
-# Try to install Flash Attention (may fail on some systems)
-echo ""
-echo "Attempting Flash Attention installation..."
-if pip install flash-attn --no-build-isolation 2>/dev/null; then
-    echo "✓ Flash Attention installed successfully"
+# Install missing Python packages
+if [ ${#MISSING_PYTHON_PACKAGES[@]} -gt 0 ]; then
+    echo ""
+    echo -e "${YELLOW}Installing ${#MISSING_PYTHON_PACKAGES[@]} missing Python packages...${NC}"
+    for pkg in "${MISSING_PYTHON_PACKAGES[@]}"; do
+        echo "  Installing $pkg..."
+        pip install --no-cache-dir "$pkg"
+    done
 else
-    echo "⚠ Flash Attention installation failed (optional - training will still work)"
+    echo -e "${GREEN}All Python packages already installed!${NC}"
+fi
+
+# Try to install Flash Attention (optional)
+echo ""
+echo -e "${BLUE}Checking Flash Attention:${NC}"
+if python -c "import flash_attn" 2>/dev/null; then
+    echo -e "  ${GREEN}✓${NC} Flash Attention already installed"
+else
+    echo "  Attempting Flash Attention installation..."
+    if pip install flash-attn --no-build-isolation 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Flash Attention installed successfully"
+    else
+        echo -e "  ${YELLOW}⚠${NC} Flash Attention installation failed (optional - training will still work)"
+    fi
 fi
 
 # Install ai-toolkit if we have a requirements.txt
@@ -202,15 +293,6 @@ if [ -f "requirements.txt" ]; then
     echo "Installing project requirements..."
     pip install --no-cache-dir -r requirements.txt
 fi
-
-# Install additional useful tools
-echo ""
-echo "Installing additional tools..."
-pip install --no-cache-dir \
-    ipython \
-    jupyter \
-    matplotlib \
-    scipy
 
 # Install ai-toolkit dependencies if ai-toolkit exists
 echo ""
@@ -223,49 +305,19 @@ if [ -d "/workspace/ai-toolkit" ]; then
     cd "$WORK_DIR"
 fi
 
-# Validation check
+# Final validation check
 echo ""
 echo "==================================================="
-echo "Validating Installation"
+echo -e "${BLUE}Final Validation${NC}"
 echo "==================================================="
-
-# Function to check if a Python package is installed
-check_package() {
-    if python -c "import $1" 2>/dev/null; then
-        version=$(python -c "import $1; print($1.__version__)" 2>/dev/null || echo "unknown")
-        echo "  ✓ $1 ($version)"
-        return 0
-    else
-        echo "  ✗ $1 - NOT INSTALLED"
-        return 1
-    fi
-}
-
-# Check required packages
-REQUIRED_PACKAGES=("torch" "transformers" "diffusers" "accelerate" "bitsandbytes" "safetensors" "einops" "omegaconf" "PIL" "tqdm")
-OPTIONAL_PACKAGES=("flash_attn" "xformers" "wandb")
-
-echo "Required packages:"
-MISSING_REQUIRED=false
-for pkg in "${REQUIRED_PACKAGES[@]}"; do
-    if ! check_package "$pkg"; then
-        MISSING_REQUIRED=true
-    fi
-done
-
-echo ""
-echo "Optional packages:"
-for pkg in "${OPTIONAL_PACKAGES[@]}"; do
-    check_package "$pkg"
-done
 
 # Check CUDA availability in PyTorch
 echo ""
-echo "PyTorch CUDA check:"
+echo "PyTorch CUDA Status:"
 if python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     CUDA_VERSION=$(python -c "import torch; print(torch.version.cuda)")
     TORCH_VERSION=$(python -c "import torch; print(torch.__version__)")
-    echo "  ✓ CUDA is available"
+    echo -e "  ${GREEN}✓${NC} CUDA is available"
     echo "  PyTorch version: $TORCH_VERSION"
     echo "  CUDA version: $CUDA_VERSION"
     
@@ -273,30 +325,44 @@ if python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     python -c "import torch; print(f'  GPU: {torch.cuda.get_device_name(0)}')" 2>/dev/null
     python -c "import torch; print(f'  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB')" 2>/dev/null
 else
-    echo "  ✗ CUDA is NOT available in PyTorch"
+    echo -e "  ${RED}✗${NC} CUDA is NOT available in PyTorch"
     echo "  This will prevent GPU training!"
-    MISSING_REQUIRED=true
 fi
 
-if [ "$MISSING_REQUIRED" = true ]; then
+# Quick final package check
+echo ""
+echo "Core package status:"
+CORE_PACKAGES=("torch" "transformers" "diffusers" "accelerate" "bitsandbytes")
+ALL_GOOD=true
+for pkg in "${CORE_PACKAGES[@]}"; do
+    if python -c "import $pkg" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} $pkg"
+    else
+        echo -e "  ${RED}✗${NC} $pkg"
+        ALL_GOOD=false
+    fi
+done
+
+if [ "$ALL_GOOD" = false ]; then
     echo ""
-    echo "ERROR: Missing required packages. Please run:"
-    echo "pip install transformers diffusers accelerate bitsandbytes safetensors einops omegaconf pillow tqdm"
-    echo ""
-    echo "If installation fails, try:"
-    echo "pip install --upgrade pip setuptools wheel"
-    echo "pip install --no-cache-dir <package_name>"
+    echo -e "${RED}ERROR: Some core packages are still missing!${NC}"
+    echo "Please check the installation logs above for errors."
     exit 1
 fi
 
 # Hugging Face login reminder
 echo ""
 echo "==================================================="
-echo "Hugging Face Authentication"
+echo -e "${BLUE}Hugging Face Authentication${NC}"
 echo "==================================================="
-echo "To access HiDream models, you need to login to Hugging Face:"
-echo "Run: huggingface-cli login"
-echo "Get your token from: https://huggingface.co/settings/tokens"
+if [ -f "$HOME/.cache/huggingface/token" ]; then
+    echo -e "${GREEN}✓${NC} Hugging Face token found"
+else
+    echo -e "${YELLOW}⚠${NC} No Hugging Face token found"
+    echo "To access HiDream models, you need to login:"
+    echo "Run: huggingface-cli login"
+    echo "Get your token from: https://huggingface.co/settings/tokens"
+fi
 
 # Create necessary directories
 echo ""
@@ -308,15 +374,15 @@ mkdir -p config
 
 # Check for existing scripts
 if [ -f "train_hidream.py" ]; then
-    echo "✓ train_hidream.py found"
+    echo -e "${GREEN}✓${NC} train_hidream.py found"
 else
-    echo "⚠ train_hidream.py not found - please ensure it's in the current directory"
+    echo -e "${YELLOW}⚠${NC} train_hidream.py not found"
 fi
 
 if [ -f "prepare_dataset.py" ]; then
-    echo "✓ prepare_dataset.py found"
+    echo -e "${GREEN}✓${NC} prepare_dataset.py found"
 else
-    echo "⚠ prepare_dataset.py not found - please ensure it's in the current directory"
+    echo -e "${YELLOW}⚠${NC} prepare_dataset.py not found"
 fi
 
 # Copy or update configuration file
@@ -446,21 +512,30 @@ fi
 
 echo ""
 echo "==================================================="
-echo "Setup Complete!"
+echo -e "${GREEN}Setup Complete!${NC}"
 echo "==================================================="
 echo ""
 
+# Installation summary
+echo -e "${BLUE}Installation Summary:${NC}"
+echo "  System packages installed: ${#MISSING_SYSTEM_PACKAGES[@]}"
+echo "  Python packages installed: ${#MISSING_PYTHON_PACKAGES[@]}"
+if [ "$NEEDS_PYTORCH_UPDATE" = true ]; then
+    echo "  PyTorch: Updated"
+fi
+
 # GPU-specific recommendations
 if [ "$IS_L40S" = true ]; then
-    echo "L40S GPU Configuration:"
+    echo ""
+    echo -e "${BLUE}L40S GPU Configuration:${NC}"
     echo "  - 48GB VRAM available"
     echo "  - Optimized for batch_size=4"
     echo "  - Full HiDream-I1-Dev model enabled"
     echo "  - Extended training to 3000 steps"
-    echo ""
 fi
 
-echo "Next steps:"
+echo ""
+echo -e "${BLUE}Next steps:${NC}"
 echo "1. Login to Hugging Face (if not already done):"
 echo "   huggingface-cli login"
 echo ""
