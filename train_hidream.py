@@ -70,11 +70,23 @@ def optimize_config_for_vram(config_path: Path, vram_gb: float, gpu_name: str = 
         import yaml
         config = yaml.safe_load(f)
     
-    train_config = config['job']['extension_args']['process'][0]['train']
-    
-    # Update dataset path if provided
-    if dataset_path:
-        config['job']['extension_args']['process'][0]['datasets'][0]['folder_path'] = str(dataset_path)
+    # Handle new config structure
+    if 'config' in config and 'process' in config['config']:
+        # New structure
+        train_config = config['config']['process'][0]['train']
+        model_config = config['config']['process'][0]['model']
+        
+        # Update dataset path if provided
+        if dataset_path:
+            config['config']['process'][0]['dataset']['datasets'][0]['folder_path'] = str(dataset_path)
+    else:
+        # Old structure fallback
+        train_config = config.get('job', {}).get('extension_args', {}).get('process', [{}])[0].get('train', {})
+        model_config = config.get('job', {}).get('extension_args', {}).get('process', [{}])[0].get('model', {})
+        
+        # Update dataset path if provided
+        if dataset_path and 'job' in config:
+            config['job']['extension_args']['process'][0]['datasets'][0]['folder_path'] = str(dataset_path)
     
     # L40S specific optimizations (48GB VRAM)
     if "L40S" in gpu_name or "L40" in gpu_name or vram_gb >= 40:
@@ -82,8 +94,8 @@ def optimize_config_for_vram(config_path: Path, vram_gb: float, gpu_name: str = 
         train_config['batch_size'] = 4
         train_config['gradient_accumulation_steps'] = 1
         train_config['gradient_checkpointing'] = False  # Not needed with 48GB
-        train_config['model']['quantize'] = False  # Full precision for best quality
-        train_config['model']['name_or_path'] = "HiDream-ai/HiDream-I1-Dev"  # Full model
+        model_config['quantize'] = False  # Full precision for best quality
+        model_config['name_or_path'] = "HiDream-ai/HiDream-I1-Full"  # Full model
         # Can increase training steps for better quality
         train_config['steps'] = 3000
         # Enable mixed precision for speed
@@ -94,26 +106,26 @@ def optimize_config_for_vram(config_path: Path, vram_gb: float, gpu_name: str = 
         train_config['batch_size'] = 1
         train_config['gradient_accumulation_steps'] = 8
         train_config['gradient_checkpointing'] = True
-        train_config['model']['quantize'] = True
+        model_config['quantize'] = True
         # Use smaller model variant
-        train_config['model']['name_or_path'] = "HiDream-ai/HiDream-I1-Fast"
+        model_config['name_or_path'] = "HiDream-ai/HiDream-I1-Fast"
         
     elif vram_gb < 24:
         print("Optimizing for medium VRAM (16-24GB)")
         train_config['batch_size'] = 1
         train_config['gradient_accumulation_steps'] = 4
         train_config['gradient_checkpointing'] = True
-        train_config['model']['quantize'] = True
-        train_config['model']['name_or_path'] = "HiDream-ai/HiDream-I1-Fast"
+        model_config['quantize'] = True
+        model_config['name_or_path'] = "HiDream-ai/HiDream-I1-Fast"
         
     else:
         print("Using standard high VRAM configuration (24-40GB)")
         train_config['batch_size'] = 2
         train_config['gradient_accumulation_steps'] = 2
         train_config['gradient_checkpointing'] = False
-        train_config['model']['quantize'] = False
+        model_config['quantize'] = False
         # Can use full model
-        train_config['model']['name_or_path'] = "HiDream-ai/HiDream-I1-Dev"
+        model_config['name_or_path'] = "HiDream-ai/HiDream-I1-Dev"
     
     return config
 
@@ -161,8 +173,15 @@ def run_training(config_path: Path, resume: bool = False, dataset_path: Path = N
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         
-        # Update dataset path in config
-        config['job']['extension_args']['process'][0]['datasets'][0]['folder_path'] = str(dataset_path)
+        # Update dataset path in config - handle new structure
+        if 'config' in config and 'process' in config['config']:
+            # New structure: config.process[0].dataset.datasets[0].folder_path
+            config['config']['process'][0]['dataset']['datasets'][0]['folder_path'] = str(dataset_path)
+        else:
+            # Fallback for old structure if it exists
+            if 'job' in config and config['job'] == 'extension':
+                if 'extension_args' in config:
+                    config['extension_args']['process'][0]['datasets'][0]['folder_path'] = str(dataset_path)
         
         # Save updated config
         with open(config_path, 'w') as f:
